@@ -1,6 +1,8 @@
 package main
 
 import (
+	"fmt"
+	"os"
 	"strings"
 	"time"
 
@@ -16,7 +18,7 @@ const (
 	OutputTopicPrefix = "TOPIC_NAME_WITH_INDEX_SUFFIX_"
 
 	// LogLevel is the loglevel in the application
-	LogLevel = zerolog.DebugLevel
+	LogLevel = zerolog.InfoLevel
 )
 
 func getRelevantTopics(logger zerolog.Logger, client sarama.Client) ([]string, error) {
@@ -88,7 +90,31 @@ func mindTopic(logger zerolog.Logger, client sarama.Client, topic string) error 
 		return nil
 	}
 
-	logger.Info().Dur("pdur", lastMsg.Timestamp.Sub(firstMsg.Timestamp)).Msg("This is the duration")
+	// We check if the last message was more than 5 minutes ago. If so we take a guess that you are done
+	if time.Since(lastMsg.Timestamp) < (5 * time.Minute) {
+		logger.Debug().Msg("Skipping as it's not been long enough since it was done")
+		return nil
+	}
+
+	dur := lastMsg.Timestamp.Sub(firstMsg.Timestamp)
+
+	fd, err := os.Create("results/" + topic + ".txt")
+	if err != nil {
+		return err
+	}
+	defer fd.Close()
+
+	fmt.Fprintf(fd, "%s,%d\n", topic, dur.Milliseconds())
+
+	admin, err := sarama.NewClusterAdminFromClient(client)
+	if err != nil {
+		return err
+	}
+
+	if err := admin.DeleteTopic(topic); err != nil {
+		return err
+	}
+	logger.Info().Msg("Removed topic")
 
 	return nil
 }
@@ -109,7 +135,7 @@ func mloop(logger zerolog.Logger, client sarama.Client) error {
 
 		}
 
-		time.Sleep(10 * time.Second)
+		time.Sleep(30 * time.Second)
 	}
 
 	return nil
