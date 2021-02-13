@@ -121,7 +121,7 @@ func mindTopic(logger zerolog.Logger, client sarama.Client, topic string) error 
 
 func mloop(logger zerolog.Logger, client sarama.Client) error {
 	for {
-		logger.Info().Msg("Starting check round")
+		logger.Debug().Msg("Starting check round")
 		topics, err := getRelevantTopics(logger, client)
 		if err != nil {
 			return err
@@ -137,8 +137,6 @@ func mloop(logger zerolog.Logger, client sarama.Client) error {
 
 		time.Sleep(30 * time.Second)
 	}
-
-	return nil
 }
 
 func main() {

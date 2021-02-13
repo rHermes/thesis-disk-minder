@@ -1,4 +1,4 @@
-module github.com/rhermes/mind
+module github.com/rhermes/thesis-disk-minder
 
 go 1.15
 
