@@ -104,7 +104,7 @@ func mindTopic(logger zerolog.Logger, client sarama.Client, topic string) error 
 	}
 	defer fd.Close()
 
-	fmt.Fprintf(fd, "%s,%d\n", topic, dur.Milliseconds())
+	fmt.Fprintf(fd, "%s,%d,%d,%d\n", topic, first, last, dur.Milliseconds())
 
 	admin, err := sarama.NewClusterAdminFromClient(client)
 	if err != nil {
