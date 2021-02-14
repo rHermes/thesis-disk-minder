@@ -1,6 +1,7 @@
 package main
 
 import (
+	"flag"
 	"fmt"
 	"os"
 	"strings"
@@ -19,6 +20,17 @@ const (
 
 	// LogLevel is the loglevel in the application
 	LogLevel = zerolog.InfoLevel
+)
+
+var (
+	// CreateTopicsFlag indicates if we should create topics or not
+	DeleteTopicsFlag = flag.Bool("delete-topics", false, "Should topics be deleted?")
+
+	// CreateTopicsFlag indicates if we should create topics or not
+	CreateTopicsFlag = flag.Bool("create-topics", false, "Should topics be created?")
+
+	// WatchDiskSpaceFlag indicates if we should watch for diskspace
+	WatchDiskSpaceFlag = flag.Bool("watch-disk-space", false, "Should we watch the disk space?")
 )
 
 func getRelevantTopics(logger zerolog.Logger, client sarama.Client) ([]string, error) {
@@ -111,10 +123,15 @@ func mindTopic(logger zerolog.Logger, client sarama.Client, topic string) error 
 		return err
 	}
 
-	if err := admin.DeleteTopic(topic); err != nil {
+	if err := admin.DeleteRecords(topic, map[int32]int64{0: last}); err != nil {
 		return err
 	}
-	logger.Info().Msg("Removed topic")
+	logger.Info().Msg("We truncated topic")
+
+	// if err := admin.DeleteTopic(topic); err != nil {
+	// 	return err
+	// }
+	// logger.Info().Msg("Removed topic")
 
 	return nil
 }
@@ -139,7 +156,67 @@ func mloop(logger zerolog.Logger, client sarama.Client) error {
 	}
 }
 
+func createDefaultTopics(logger zerolog.Logger, client sarama.Client) error {
+	topicsSlice, err := client.Topics()
+	if err != nil {
+		return err
+	}
+	topicMap := makeStrLookupMap(topicsSlice)
+
+	admin, err := sarama.NewClusterAdminFromClient(client)
+	if err != nil {
+		return err
+	}
+
+	for _, topic := range generateDefaultTopicNames() {
+		logger := logger.With().Str("topic", topic).Logger()
+
+		if _, ok := topicMap[topic]; ok {
+			continue
+		}
+
+		if err := admin.CreateTopic(topic, &sarama.TopicDetail{
+			NumPartitions:     1,
+			ReplicationFactor: 1,
+		}, false); err != nil {
+			logger.Err(err).Msg("Couldn't create topic")
+		} else {
+			logger.Info().Msg("Created topic")
+		}
+	}
+
+	return nil
+}
+
+func deleteDefaultTopics(logger zerolog.Logger, client sarama.Client) error {
+	admin, err := sarama.NewClusterAdminFromClient(client)
+	if err != nil {
+		return err
+	}
+
+	topics, err := client.Topics()
+	if err != nil {
+		return err
+	}
+
+	for _, topic := range topics {
+		logger := logger.With().Str("topic", topic).Logger()
+
+		if !strings.HasPrefix(topic, OutputTopicPrefix) {
+			continue
+		}
+
+		if err := admin.DeleteTopic(topic); err != nil {
+			logger.Err(err).Msg("Couldn't delete this topic")
+		} else {
+			logger.Info().Msg("Deleted topic")
+		}
+	}
+	return nil
+}
+
 func main() {
+	flag.Parse()
 
 	opts := func(w *zerolog.ConsoleWriter) {
 		w.NoColor = true
@@ -147,8 +224,6 @@ func main() {
 	}
 	logger := zerolog.New(zerolog.NewConsoleWriter(opts)).
 		With().Timestamp().Logger().Level(LogLevel)
-
-	logger.Debug().Msg("Started minding your business")
 
 	cfg := sarama.NewConfig()
 	cfg.Consumer.MaxWaitTime = 50 * time.Millisecond
@@ -158,9 +233,36 @@ func main() {
 	}
 	defer client.Close()
 
-	if err := mloop(logger, client); err != nil {
-		logger.Fatal().Err(err).Msg("Something went wrong in the main loop")
+	if *DeleteTopicsFlag {
+		logger.Info().Msg("deleting topics")
+		if err := deleteDefaultTopics(logger, client); err != nil {
+			logger.Fatal().Err(err).Msg("Couldn't delete topics")
+		}
+		logger.Info().Msg("deleted topics")
+
+		if err := client.RefreshMetadata(); err != nil {
+			logger.Fatal().Err(err).Msg("Couldn't refresh metadata")
+		}
 	}
 
-	logger.Debug().Msg("Stopped minding your business")
+	if *CreateTopicsFlag {
+		logger.Info().Msg("Creating topics")
+		if err := createDefaultTopics(logger, client); err != nil {
+			logger.Fatal().Err(err).Msg("Couldn't create topics")
+		}
+		logger.Info().Msg("Created topics")
+
+		if err := client.RefreshMetadata(); err != nil {
+			logger.Fatal().Err(err).Msg("Couldn't refresh metadata")
+		}
+	}
+
+	if *WatchDiskSpaceFlag {
+		logger.Info().Msg("Started minding your business")
+		if err := mloop(logger, client); err != nil {
+			logger.Fatal().Err(err).Msg("Something went wrong in the main loop")
+		}
+		logger.Info().Msg("Stopped minding your business")
+	}
+
 }
