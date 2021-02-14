@@ -103,12 +103,14 @@ func mindTopic(logger zerolog.Logger, client sarama.Client, topic string) error 
 	}
 
 	// We check if the last message was more than 5 minutes ago. If so we take a guess that you are done
-	if time.Since(lastMsg.Timestamp) < (5 * time.Minute) {
+	if time.Since(lastMsg.Timestamp) < (2 * time.Minute) {
 		logger.Debug().Msg("Skipping as it's not been long enough since it was done")
 		return nil
 	}
 
 	dur := lastMsg.Timestamp.Sub(firstMsg.Timestamp)
+
+	logger = logger.With().Dur("dur", dur).Logger()
 
 	fd, err := os.Create("results/" + topic + ".txt")
 	if err != nil {
@@ -126,13 +128,7 @@ func mindTopic(logger zerolog.Logger, client sarama.Client, topic string) error 
 	if err := admin.DeleteRecords(topic, map[int32]int64{0: last}); err != nil {
 		return err
 	}
-	logger.Info().Msg("We truncated topic")
-
-	// if err := admin.DeleteTopic(topic); err != nil {
-	// 	return err
-	// }
-	// logger.Info().Msg("Removed topic")
-
+	logger.Info().Msg("Truncated topic")
 	return nil
 }
 
