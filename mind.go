@@ -4,6 +4,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -23,7 +24,7 @@ const (
 )
 
 var (
-	// CreateTopicsFlag indicates if we should create topics or not
+	// DeleteTopicsFlag indicates if we should create topics or not
 	DeleteTopicsFlag = flag.Bool("delete-topics", false, "Should topics be deleted?")
 
 	// CreateTopicsFlag indicates if we should create topics or not
@@ -174,6 +175,11 @@ func createDefaultTopics(logger zerolog.Logger, client sarama.Client) error {
 		if err := admin.CreateTopic(topic, &sarama.TopicDetail{
 			NumPartitions:     1,
 			ReplicationFactor: 1,
+			ConfigEntries: map[string]*string{
+				"cleanup.policy":   strPtr("delete"),
+				"compression.type": strPtr("snappy"),
+				"segment.bytes":    strPtr(strconv.Itoa(1048576 * 50)),
+			},
 		}, false); err != nil {
 			logger.Err(err).Msg("Couldn't create topic")
 		} else {

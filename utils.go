@@ -2,6 +2,10 @@ package main
 
 import "fmt"
 
+func strPtr(s string) *string {
+	return &s
+}
+
 // makeStrLookupMap create a lookup map for a string slice
 func makeStrLookupMap(xs []string) map[string]struct{} {
 	m := make(map[string]struct{}, 0)
