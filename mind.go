@@ -19,16 +19,25 @@ const (
 	// OutputTopicPrefix is the prefix for output topics
 	OutputTopicPrefix = "TOPIC_NAME_WITH_INDEX_SUFFIX_"
 
+	// TempTopic is a temporary topic, that is used to test continues streaming
+	TempTopic = "TEMP_TOPIC_HERE"
+
 	// LogLevel is the loglevel in the application
 	LogLevel = zerolog.InfoLevel
 )
 
 var (
-	// DeleteTopicsFlag indicates if we should create topics or not
+	// DeleteTopicsFlag indicates if we should delete topics or not
 	DeleteTopicsFlag = flag.Bool("delete-topics", false, "Should topics be deleted?")
 
 	// CreateTopicsFlag indicates if we should create topics or not
 	CreateTopicsFlag = flag.Bool("create-topics", false, "Should topics be created?")
+
+	// DeleteTempTopicFlag indicates if we should delete the temporary topic
+	DeleteTempTopicFlag = flag.Bool("delete-temp-topic", false, "Should temporary topic be deleted?")
+
+	// CreateTempTopicFlag indicates if we should create topics or not
+	CreateTempTopicFlag = flag.Bool("create-temp-topic", false, "Should the temporary topic be created?")
 
 	// WatchDiskSpaceFlag indicates if we should watch for diskspace
 	WatchDiskSpaceFlag = flag.Bool("watch-disk-space", false, "Should we watch the disk space?")
@@ -153,6 +162,70 @@ func mloop(logger zerolog.Logger, client sarama.Client) error {
 	}
 }
 
+func createTemporaryTopic(logger zerolog.Logger, client sarama.Client) error {
+	topicsSlice, err := client.Topics()
+	if err != nil {
+		return err
+	}
+	topicMap := makeStrLookupMap(topicsSlice)
+
+	if _, ok := topicMap[TempTopic]; ok {
+		logger.Info().Msg("Topic exists, not creating")
+		return nil
+	}
+
+	admin, err := sarama.NewClusterAdminFromClient(client)
+	if err != nil {
+		return err
+	}
+
+	der := time.Second * 30
+
+	if err := admin.CreateTopic(TempTopic, &sarama.TopicDetail{
+		NumPartitions:     1,
+		ReplicationFactor: 1,
+		ConfigEntries: map[string]*string{
+			"cleanup.policy":      strPtr("delete"),
+			"compression.type":    strPtr("snappy"),
+			"segment.bytes":       strPtr(strconv.Itoa(1048576 * 50)),
+			"delete.retention.ms": strPtr(strconv.FormatInt(der.Milliseconds(), 10)),
+		},
+	}, false); err != nil {
+		logger.Err(err).Msg("Couldn't create topic")
+		return err
+	}
+
+	logger.Info().Msg("Temp topic created")
+	return nil
+}
+
+func deleteTemporaryTopic(logger zerolog.Logger, client sarama.Client) error {
+	topicsSlice, err := client.Topics()
+	if err != nil {
+		return err
+	}
+
+	topicMap := makeStrLookupMap(topicsSlice)
+
+	if _, ok := topicMap[TempTopic]; !ok {
+		logger.Info().Msg("Temp topic doesn't exist")
+		return nil
+	}
+
+	admin, err := sarama.NewClusterAdminFromClient(client)
+	if err != nil {
+		return err
+	}
+
+	if err := admin.DeleteTopic(TempTopic); err != nil {
+		logger.Err(err).Msg("Couldn't delete temp topic")
+		return err
+	}
+
+	logger.Info().Msg("Deleted temp topic")
+	return nil
+}
+
 func createDefaultTopics(logger zerolog.Logger, client sarama.Client) error {
 	topicsSlice, err := client.Topics()
 	if err != nil {
@@ -234,6 +307,28 @@ func main() {
 		logger.Fatal().Err(err).Msg("Couldn't create client")
 	}
 	defer client.Close()
+
+	if *DeleteTempTopicFlag {
+		logger.Info().Msg("deleting temp topic")
+		if err := deleteTemporaryTopic(logger, client); err != nil {
+			logger.Fatal().Err(err).Msg("Couldn't delete temp topic")
+		}
+
+		if err := client.RefreshMetadata(); err != nil {
+			logger.Fatal().Err(err).Msg("Couldn't refresh metadata")
+		}
+	}
+
+	if *CreateTempTopicFlag {
+		logger.Info().Msg("creating temp topic")
+		if err := createTemporaryTopic(logger, client); err != nil {
+			logger.Fatal().Err(err).Msg("Couldn't create temp topic")
+		}
+
+		if err := client.RefreshMetadata(); err != nil {
+			logger.Fatal().Err(err).Msg("Couldn't refresh metadata")
+		}
+	}
 
 	if *DeleteTopicsFlag {
 		logger.Info().Msg("deleting topics")
