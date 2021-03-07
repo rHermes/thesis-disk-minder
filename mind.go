@@ -4,6 +4,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"os/signal"
 	"strconv"
 	"strings"
 	"time"
@@ -41,6 +42,9 @@ var (
 
 	// WatchDiskSpaceFlag indicates if we should watch for diskspace
 	WatchDiskSpaceFlag = flag.Bool("watch-disk-space", false, "Should we watch the disk space?")
+
+	// TempTopicSenderFlag indicates if we should start the temp topic sending loop
+	TempTopicSenderFlag = flag.Bool("temp-topic-sender", false, "Should we start the temp topic sender loop")
 )
 
 func getRelevantTopics(logger zerolog.Logger, client sarama.Client) ([]string, error) {
@@ -185,10 +189,10 @@ func createTemporaryTopic(logger zerolog.Logger, client sarama.Client) error {
 		NumPartitions:     1,
 		ReplicationFactor: 1,
 		ConfigEntries: map[string]*string{
-			"cleanup.policy":      strPtr("delete"),
-			"compression.type":    strPtr("snappy"),
-			"segment.bytes":       strPtr(strconv.Itoa(1048576 * 50)),
-			"delete.retention.ms": strPtr(strconv.FormatInt(der.Milliseconds(), 10)),
+			"cleanup.policy":   strPtr("delete"),
+			"compression.type": strPtr("snappy"),
+			"segment.bytes":    strPtr(strconv.Itoa(1048576 * 50)),
+			"retention.ms":     strPtr(strconv.FormatInt(der.Milliseconds(), 10)),
 		},
 	}, false); err != nil {
 		logger.Err(err).Msg("Couldn't create topic")
@@ -290,6 +294,75 @@ func deleteDefaultTopics(logger zerolog.Logger, client sarama.Client) error {
 	return nil
 }
 
+// tempTopicLoop sends data to a topic in an increasing wave
+func tempTopicLoop(logger zerolog.Logger, client sarama.Client) error {
+	ap, err := sarama.NewAsyncProducerFromClient(client)
+	if err != nil {
+		return err
+	}
+	defer ap.Close()
+
+	// Ticker when we increase the rate
+	incTic := time.NewTicker(time.Second * 5)
+	defer incTic.Stop()
+
+	rps := uint64(600)
+	rpsInc := uint64(500)
+
+	rps = uint64(5_000_000)
+
+	// Ticker which we
+	sendTicker := time.NewTicker(time.Second / time.Duration(rps))
+	defer sendTicker.Stop()
+
+	statusTicker := time.NewTicker(time.Second * 2)
+	defer statusTicker.Stop()
+
+	c := make(chan os.Signal, 1)
+	signal.Notify(c, os.Interrupt)
+
+	ll := logger.Sample(zerolog.Sometimes)
+	ll = ll
+
+	for {
+		select {
+		case <-statusTicker.C:
+			// logger.Info().Msg("We are here")
+		case <-incTic.C:
+			ap.Input() <- &sarama.ProducerMessage{
+				Topic: TempTopic,
+				Value: sarama.StringEncoder("print this please"),
+			}
+
+			continue
+
+			rps += rpsInc
+			logger.Info().Uint64("rps", rps).Msg("Increasing rate")
+			sendTicker.Reset(time.Second / time.Duration(rps))
+
+		case a := <-c:
+			logger.Info().Str("signal", a.String()).Msg("We got a signal, quiting")
+			return nil
+
+		case <-sendTicker.C:
+			// ll.Info().Msg("We sending")
+
+			ap.Input() <- &sarama.ProducerMessage{
+				Topic: TempTopic,
+				Value: sarama.StringEncoder("We teste this"),
+			}
+
+		case succ := <-ap.Successes():
+			succ = succ
+			logger.Info().Msg("We got success")
+
+		case err := <-ap.Errors():
+			logger.Err(err).Msg("Something went wrong")
+		}
+	}
+	return nil
+}
+
 func main() {
 	flag.Parse()
 
@@ -360,6 +433,14 @@ func main() {
 			logger.Fatal().Err(err).Msg("Something went wrong in the main loop")
 		}
 		logger.Info().Msg("Stopped minding your business")
+	}
+
+	if *TempTopicSenderFlag {
+		logger.Info().Msg("Starting temp topic sender")
+		if err := tempTopicLoop(logger, client); err != nil {
+			logger.Fatal().Err(err).Msg("Something went wrong in the tempTopicLoop")
+		}
+		logger.Info().Msg("Stopped temp topic sender")
 	}
 
 }
